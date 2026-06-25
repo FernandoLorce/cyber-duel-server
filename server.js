@@ -54,10 +54,14 @@ wss.on('connection', (ws, req) => {
                         playerCount: room.clients.size
                     }));
                     
-                    broadcastToRoom(roomId, {
-                        type: 'room_update',
-                        playerCount: room.clients.size
-                    }, ws);
+                     room.clients.forEach((client) => {
+        if (client !== ws && client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({
+                type: 'room_update',
+                playerCount: room.clients.size
+            }));
+        }
+    });
                     break;
                 }
                 
