@@ -2,7 +2,6 @@ const WebSocket = require('ws');
 const http = require('http');
 
 const server = http.createServer((req, res) => {
-    // 健康检查
     if (req.url === '/health' || req.url === '/') {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
         res.end('WebSocket server is running');
@@ -12,28 +11,26 @@ const server = http.createServer((req, res) => {
     res.end('Not found');
 });
 
-const wss = new WebSocket.Server({ 
-    server,
-    // 添加这个选项允许所有连接
-    perMessageDeflate: false
-});
+const wss = new WebSocket.Server({ server, perMessageDeflate: false });
 
-// 存储房间
 const rooms = new Map();
+
+// 最大玩家数
+const MAX_PLAYERS = 4;
 
 wss.on('connection', (ws, req) => {
     console.log('🔗 新客户端连接');
-    let clientRoom = null;
     let clientId = null;
+    let roomId = null;
 
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
-            console.log('📩 收到消息:', data.type);
-            
+            console.log('📩 收到消息:', data.type, '来自:', clientId || 'unknown');
+
             switch(data.type) {
                 case 'join_room': {
-                    const roomId = data.roomId;
+                    roomId = data.roomId;
                     clientId = data.clientId || 'client_' + Date.now();
                     
                     if (!rooms.has(roomId)) {
@@ -41,32 +38,42 @@ wss.on('connection', (ws, req) => {
                     }
                     
                     const room = rooms.get(roomId);
+                    
+                    // 检查房间是否已满（4人）
+                    if (room.clients.size >= MAX_PLAYERS) {
+                        ws.send(JSON.stringify({
+                            type: 'error',
+                            message: '房间已满（最多4人）'
+                        }));
+                        return;
+                    }
+                    
                     room.clients.set(clientId, ws);
                     ws.clientId = clientId;
                     ws.roomId = roomId;
                     
-                    console.log(`✅ ${clientId} 加入房间 ${roomId} (${room.clients.size}/2)`);
+                    console.log(`✅ ${clientId} 加入房间 ${roomId} (${room.clients.size}/${MAX_PLAYERS})`);
                     
+                    // 发送给当前客户端
                     ws.send(JSON.stringify({
                         type: 'room_joined',
                         roomId: roomId,
                         clientId: clientId,
-                        playerCount: room.clients.size
+                        playerCount: room.clients.size,
+                        maxPlayers: MAX_PLAYERS
                     }));
                     
-                     room.clients.forEach((client) => {
-        if (client !== ws && client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify({
-                type: 'room_update',
-                playerCount: room.clients.size
-            }));
-        }
-    });
+                    // 广播给所有人（包括自己，更新人数）
+                    broadcastToRoom(roomId, {
+                        type: 'room_update',
+                        playerCount: room.clients.size,
+                        maxPlayers: MAX_PLAYERS
+                    });
                     break;
                 }
                 
                 case 'state_update': {
-                    if (ws.roomId) {
+                    if (ws.roomId && rooms.has(ws.roomId)) {
                         broadcastToRoom(ws.roomId, {
                             type: 'state_update',
                             state: data.state
@@ -76,7 +83,7 @@ wss.on('connection', (ws, req) => {
                 }
                 
                 case 'breach_alert': {
-                    if (ws.roomId) {
+                    if (ws.roomId && rooms.has(ws.roomId)) {
                         broadcastToRoom(ws.roomId, {
                             type: 'breach_alert',
                             deptId: data.deptId,
@@ -89,7 +96,7 @@ wss.on('connection', (ws, req) => {
                 }
                 
                 case 'breach_defended': {
-                    if (ws.roomId) {
+                    if (ws.roomId && rooms.has(ws.roomId)) {
                         broadcastToRoom(ws.roomId, {
                             type: 'breach_defended',
                             deptId: data.deptId
@@ -99,7 +106,7 @@ wss.on('connection', (ws, req) => {
                 }
                 
                 case 'game_over': {
-                    if (ws.roomId) {
+                    if (ws.roomId && rooms.has(ws.roomId)) {
                         broadcastToRoom(ws.roomId, {
                             type: 'game_over'
                         }, ws);
@@ -108,7 +115,7 @@ wss.on('connection', (ws, req) => {
                 }
                 
                 case 'reset_game': {
-                    if (ws.roomId) {
+                    if (ws.roomId && rooms.has(ws.roomId)) {
                         broadcastToRoom(ws.roomId, {
                             type: 'reset_game'
                         }, ws);
@@ -132,9 +139,10 @@ wss.on('connection', (ws, req) => {
             } else {
                 broadcastToRoom(ws.roomId, {
                     type: 'room_update',
-                    playerCount: room.clients.size
+                    playerCount: room.clients.size,
+                    maxPlayers: MAX_PLAYERS
                 });
-                console.log(`👋 ${ws.clientId} 离开房间 ${ws.roomId} (${room.clients.size}/2)`);
+                console.log(`👋 ${ws.clientId} 离开房间 ${ws.roomId} (${room.clients.size}/${MAX_PLAYERS})`);
             }
         }
     });
@@ -153,9 +161,8 @@ function broadcastToRoom(roomId, data, excludeWs = null) {
     });
 }
 
-// 重要：必须监听 0.0.0.0
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 WebSocket 服务器运行在端口 ${PORT}`);
-    console.log(`📡 等待连接...`);
+    console.log(`📡 最大玩家数: ${MAX_PLAYERS}`);
 });
