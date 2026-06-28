@@ -39,6 +39,37 @@ wss.on('connection', (ws, req) => {
                     
                     const room = rooms.get(roomId);
                     
+                    // 清理无效的旧连接（断开但未清理的客户端）
+                    room.clients.forEach(function(existingWs, existingClientId) {
+                        if (existingWs.readyState !== WebSocket.OPEN) {
+                            room.clients.delete(existingClientId);
+                            console.log("Cleaning stale client: " + existingClientId);
+                        }
+                    });
+                    
+                    // 如果同一 clientId 已存在，替换旧连接（游戏结束后重新加入）
+                    if (room.clients.has(clientId)) {
+                        const oldWs = room.clients.get(clientId);
+                        try { oldWs.close(); } catch(e) {}
+                        room.clients.set(clientId, ws);
+                        ws.clientId = clientId;
+                        ws.roomId = roomId;
+                        console.log("Rejoining room " + roomId + " (" + room.clients.size + "/" + MAX_PLAYERS + ")");
+                        ws.send(JSON.stringify({
+                            type: "room_joined",
+                            roomId: roomId,
+                            clientId: clientId,
+                            playerCount: room.clients.size,
+                            maxPlayers: MAX_PLAYERS
+                        }));
+                        broadcastToRoom(roomId, {
+                            type: "room_update",
+                            playerCount: room.clients.size,
+                            maxPlayers: MAX_PLAYERS
+                        });
+                        return;
+                    }
+                    
                     // 检查房间是否已满（4人）
                     if (room.clients.size >= MAX_PLAYERS) {
                         ws.send(JSON.stringify({
@@ -119,6 +150,26 @@ wss.on('connection', (ws, req) => {
                         broadcastToRoom(ws.roomId, {
                             type: 'reset_game'
                         }, ws);
+                    }
+                    break;
+                }
+                
+                case 'leave_room': {
+                    if (ws.roomId && rooms.has(ws.roomId)) {
+                        const room = rooms.get(ws.roomId);
+                        room.clients.delete(ws.clientId);
+                        console.log(ws.clientId + " leaving room " + ws.roomId);
+                        if (room.clients.size === 0) {
+                            rooms.delete(ws.roomId);
+                            console.log("Room " + ws.roomId + " destroyed");
+                        } else {
+                            broadcastToRoom(ws.roomId, {
+                                type: 'room_update',
+                                playerCount: room.clients.size,
+                                maxPlayers: MAX_PLAYERS
+                            });
+                        }
+                        ws.clientId = null;
                     }
                     break;
                 }
