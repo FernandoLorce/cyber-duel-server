@@ -16,7 +16,7 @@ const wss = new WebSocket.Server({ server, perMessageDeflate: false });
 const rooms = new Map();
 
 // 最大玩家数
-const MAX_PLAYERS = 4;
+const MAX_PLAYERS = 8;
 
 wss.on('connection', (ws, req) => {
     console.log('🔗 新客户端连接');
